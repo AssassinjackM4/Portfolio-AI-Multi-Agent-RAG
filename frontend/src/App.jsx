@@ -150,19 +150,24 @@ function App() {
         ),
       )
     } catch (chatError) {
+      const errorMessage =
+        chatError?.response?.data?.detail ||
+        (chatError?.code === 'ERR_NETWORK'
+          ? 'Cannot connect to the AI backend. Check the backend service and try again.'
+          : chatError?.message || 'Unable to get a response.')
+
       setMessages((current) =>
         current.map((message) =>
           message.id === loadingMessage.id
             ? {
                 ...message,
-                content:
-                  'I hit a connection issue while contacting the AI backend. Please try again in a moment.',
+                content: errorMessage,
                 isLoading: false,
               }
             : message,
         ),
       )
-      setError(chatError?.response?.data?.detail || chatError.message || 'Unable to get a response.')
+      setError(errorMessage)
     } finally {
       setIsSending(false)
     }

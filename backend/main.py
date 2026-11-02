@@ -9,7 +9,7 @@ import chromadb
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from groq import Groq
+from groq import APIConnectionError, APIError, APIStatusError, Groq
 from pydantic import BaseModel, Field
 from pypdf import PdfReader
 
@@ -59,15 +59,34 @@ RETRIEVAL_STOP_WORDS = {
 MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 logger = logging.getLogger(__name__)
 
+
+def get_allowed_origins() -> list[str]:
+    configured_origins = [
+        os.getenv(
+            "FRONTEND_URL",
+            "https://portfolio-ai-multi-agent-rag.vercel.app",
+        ),
+        *os.getenv("FRONTEND_ORIGINS", "").split(","),
+    ]
+    origins = {
+        origin.strip().rstrip("/")
+        for origin in configured_origins
+        if origin.strip()
+    }
+    return sorted(
+        origins
+        | {
+            "http://localhost:3000",
+            "http://localhost:5173",
+            "https://portfolio-ai-frontend.vercel.app",
+        }
+    )
+
+
 app = FastAPI(title="Portfolio AI API", version="2.0.0")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://localhost:3000",
-        "https://portfolio-ai-frontend.vercel.app",
-        "*",
-    ],
+    allow_origins=get_allowed_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -214,11 +233,27 @@ RESUME EXCERPTS:
                 {"role": "user", "content": question.strip()},
             ],
         )
-    except Exception as error:
+    except APIError as error:
         logger.exception("Groq answer generation failed")
+        if isinstance(error, APIStatusError):
+            if error.status_code in {401, 403}:
+                detail = "AI provider authentication failed. Check GROQ_API_KEY in the backend environment."
+            elif error.status_code == 404:
+                detail = "The configured AI model was not found. Check GROQ_MODEL in the backend environment."
+            elif error.status_code == 429:
+                detail = "The AI provider rate limit or quota was reached. Check your Groq account limits and try again."
+            else:
+                detail = (
+                    f"The AI provider request failed with HTTP {error.status_code}. "
+                    "Check backend logs and provider status."
+                )
+        elif isinstance(error, APIConnectionError):
+            detail = "Could not reach the AI provider. Check backend network access and try again."
+        else:
+            detail = "The AI provider request failed. Check backend logs and try again."
         raise HTTPException(
             status_code=502,
-            detail="The AI provider could not generate an answer. Check the backend logs and try again.",
+            detail=detail,
         ) from error
 
     answer = response.choices[0].message.content
